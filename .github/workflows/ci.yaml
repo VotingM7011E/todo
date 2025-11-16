@@ -83,7 +83,7 @@ jobs:
       - name: Build & Push Backend
         uses: docker/build-push-action@v6
         with:
-          context: ./backend
+          context: ./src/backend
           push: true
           tags: |
             ${{ env.IMAGE_REPO }}-backend:${{ github.sha }}
@@ -94,7 +94,7 @@ jobs:
       - name: Build & Push Frontend
         uses: docker/build-push-action@v6
         with:
-          context: ./frontend
+          context: ./src/frontend
           push: true
           tags: |
             ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
