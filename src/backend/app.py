@@ -226,18 +226,6 @@ def home():
         }
     })
 
-@app.route('/api')
-def api_root():
-    return jsonify({
-        "message": "Todo List REST API",
-        "endpoints": {
-            "GET /api/todos": "Get all todos",
-            "POST /api/todos": "Create a new todo",
-            "DELETE /api/todos/<id>": "Delete a todo"
-        }
-    })
-
-
 
 # Run the application
 if __name__ == '__main__':
