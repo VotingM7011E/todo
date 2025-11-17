@@ -4,29 +4,14 @@ on:
   push:
     branches: [ "main", "staging", "dev" ]
     paths:
-      - 'Dockerfile'
       - 'src/**'
+      - 'Dockerfile'
       - '.github/workflows/**'
       - '!**/*.md'
-  workflow_dispatch:
-    inputs:
-      env:
-        description: "Target environment (dev/staging/production)"
-        required: false
-        default: ""
-      force_build:
-        description: "Force image rebuild even if no changes"
-        required: false
-        default: "false"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-
     env:
       IMAGE_REPO: ghcr.io/votingm7011e/todo
       GITOPS_REPO: votingm7011e/gitops
@@ -54,46 +39,45 @@ jobs:
           filters: |
             backend:
               - 'src/backend/**'
-              - 'src/backend/Dockerfile'
             frontend:
               - 'src/frontend/**'
-              - 'src/frontend/Dockerfile'
 
       - name: Build & Push Backend
         id: build_backend
-        if: steps.changes.outputs.backend == 'true' || github.event.inputs.force_build == 'true'
+        if: steps.changes.outputs.backend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/backend
           push: true
           tags: ${{ env.IMAGE_REPO }}-backend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build & Push Frontend
         id: build_frontend
-        if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == 'true'
+        if: steps.changes.outputs.frontend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
           push: true
           tags: ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
-      - name: Resolve Environment
-        id: resolve
+      - name: Set backend tag
+        id: backend_tag
         run: |
-          INPUT_ENV="${{ github.event.inputs.env }}"
-          if [[ -n "$INPUT_ENV" ]]; then
-            echo "TARGET_ENV=$INPUT_ENV" >> "$GITHUB_OUTPUT"
+          if [[ "${{ steps.changes.outputs.backend }}" == "true" ]]; then
+            echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
-            case "${GITHUB_REF_NAME}" in
-              main) echo "TARGET_ENV=dev" >> "$GITHUB_OUTPUT" ;;
-              staging) echo "TARGET_ENV=staging" >> "$GITHUB_OUTPUT" ;;
-              dev) echo "TARGET_ENV=dev" >> "$GITHUB_OUTPUT" ;;
-              *) echo "Unsupported branch '${GITHUB_REF_NAME}'"; exit 1 ;;
-            esac
+            TAG=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://ghcr.io/v2/your-org/your-app-backend/tags/list | jq -r '.tags[0]')
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set frontend tag
+        id: frontend_tag
+        run: |
+          if [[ "${{ steps.changes.outputs.frontend }}" == "true" ]]; then
+            echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" https://ghcr.io/v2/your-org/your-app-frontend/tags/list | jq -r '.tags[0]')
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install yq
@@ -103,43 +87,30 @@ jobs:
 
       - name: Clone GitOps repo
         run: |
-          git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}"             "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
+          git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}" "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
-      - name: Compare image tags
-        id: diff
-        run: |
-          cd gitops-repo
-          VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
-          CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
-          CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
-          echo "CURRENT_BACKEND_TAG=$CURRENT_BACKEND_TAG" >> "$GITHUB_OUTPUT"
-          echo "CURRENT_FRONTEND_TAG=$CURRENT_FRONTEND_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Update values file
+      - name: Compare and update GitOps values
         id: update_values
         run: |
           cd gitops-repo
-          VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+          VALUES_FILE="environments/dev/${{ env.APP_FILE }}"
+
+          CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
+          CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
+
+          BACKEND_TAG="${{ steps.backend_tag.outputs.tag }}"
+          FRONTEND_TAG="${{ steps.frontend_tag.outputs.tag }}"
+
           CHANGED=false
 
-          if [[ "${{ steps.changes.outputs.backend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
-            if [[ "${{ steps.diff.outputs.CURRENT_BACKEND_TAG }}" != "${{ github.sha }}" ]]; then
-              yq -i '
-                .image.backendRepository = "${{ env.IMAGE_REPO }}-backend" |
-                .image.backendTag = "${{ github.sha }}"
-              ' "$VALUES_FILE"
-              CHANGED=true
-            fi
+          if [[ "$CURRENT_BACKEND_TAG" != "$BACKEND_TAG" ]]; then
+            yq -i ".image.backendTag = "$BACKEND_TAG"" "$VALUES_FILE"
+            CHANGED=true
           fi
 
-          if [[ "${{ steps.changes.outputs.frontend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
-            if [[ "${{ steps.diff.outputs.CURRENT_FRONTEND_TAG }}" != "${{ github.sha }}" ]]; then
-              yq -i '
-                .image.frontendRepository = "${{ env.IMAGE_REPO }}-frontend" |
-                .image.frontendTag = "${{ github.sha }}"
-              ' "$VALUES_FILE"
-              CHANGED=true
-            fi
+          if [[ "$CURRENT_FRONTEND_TAG" != "$FRONTEND_TAG" ]]; then
+            yq -i ".image.frontendTag = "$FRONTEND_TAG"" "$VALUES_FILE"
+            CHANGED=true
           fi
 
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
@@ -151,5 +122,5 @@ jobs:
           git config user.name "GitOps CI"
           git config user.email "actions@github.com"
           git add .
-          git commit -m "chore(${{ steps.resolve.outputs.TARGET_ENV }}): update todo image tags to ${{ github.sha }} [skip ci]"
+          git commit -m "chore: update image tags [skip ci]"
           git push origin "${{ env.GITOPS_BRANCH }}"
