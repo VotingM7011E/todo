@@ -97,8 +97,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-        retry:
-          max-attempts: 3
 
       # Build and push frontend image if changes detected or force_build is true
       - name: Build & Push Frontend
@@ -111,8 +109,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-        retry:
-          max-attempts: 3
 
       # Export the image tag based on the current commit SHA
       - name: Export IMAGE_TAG
@@ -200,8 +196,6 @@ jobs:
           git add .
           git commit -m "chore(${{ steps.resolve.outputs.TARGET_ENV }}): bump todo images to ${{ steps.tag.outputs.IMAGE_TAG }} [skip ci]"
           git push origin "${{ env.GITOPS_BRANCH }}"
-        retry:
-          max-attempts: 3
 
       # Create a pull request if update_mode is pr
       - name: Create PR
@@ -220,5 +214,3 @@ jobs:
           branch: "bump/${{ steps.resolve.outputs.TARGET_ENV }}/todo-${{ steps.tag.outputs.IMAGE_TAG }}"
           base: ${{ env.GITOPS_BRANCH }}
           labels: gitops, automated
-        retry:
-          max-attempts: 3
