@@ -42,7 +42,7 @@ jobs:
       - name: Run unit tests
         run: |
           cd backend-tests
-          pytest test_unit.py -v
+          PYTHONPATH=../src/backend pytest test_unit.py -v
 
       - name: Run integration tests
         env:
@@ -53,10 +53,9 @@ jobs:
           DB_NAME: test_tododb
         run: |
           cd backend-tests
-          pytest test_integration.py -v
+          PYTHONPATH=../src/backend pytest test_integration.py -v
 
       - name: Run API tests
         run: |
           cd backend-tests
-          pytest test_api.py -v
-
+          PYTHONPATH=../src/backend pytest test_api.py -v
