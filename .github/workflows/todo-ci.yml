@@ -82,7 +82,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build & Push Frontend
-        if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == ' 'true'
+        if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
