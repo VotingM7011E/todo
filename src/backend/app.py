@@ -14,6 +14,30 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flasgger import Swagger
 
+import os
+import psycopg2
+
+def get_db_connection():
+    return psycopg2.connect(
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        database=os.getenv("POSTGRES_DB", "tododb"),
+        user=os.getenv("POSTGRES_USER", "postgres"),
+        password=os.getenv("POSTGRES_PASSWORD", "postgres")
+    )
+
+def initialize_db():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS todos (
+            id SERIAL PRIMARY KEY,
+            text TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+    cur.close()
+    conn.close()
+
 # Initialize Flask application
 app = Flask(__name__)
 
@@ -60,157 +84,49 @@ swagger_template = {
 
 swagger = Swagger(app, config=swagger_config, template=swagger_template)
 
-# In-memory storage for todos (will be reset when server restarts)
-# In production, you would use a database like PostgreSQL, MongoDB, etc.
-todos = []
-
-# Counter for generating unique IDs
-next_id = 1
-
-
 @app.route('/api/todos', methods=['GET'])
 def get_todos():
-    """
-    Get all todos
-    Retrieve a list of all todo items
-    ---
-    tags:
-      - todos
-    responses:
-      200:
-        description: A list of todos
-        schema:
-          type: array
-          items:
-            type: object
-            properties:
-              id:
-                type: integer
-                description: The todo ID
-                example: 1
-              text:
-                type: string
-                description: The todo text
-                example: "Learn Flask"
-    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, text FROM todos;")
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    todos = [{'id': row[0], 'text': row[1]} for row in rows]
     return jsonify(todos), 200
-
 
 @app.route('/api/todos', methods=['POST'])
 def create_todo():
-    """
-    Create a new todo
-    Add a new todo item to the list
-    ---
-    tags:
-      - todos
-    parameters:
-      - in: body
-        name: body
-        required: true
-        description: Todo item to create
-        schema:
-          type: object
-          required:
-            - text
-          properties:
-            text:
-              type: string
-              description: The todo text
-              example: "Learn Flask"
-    responses:
-      201:
-        description: Todo created successfully
-        schema:
-          type: object
-          properties:
-            id:
-              type: integer
-              description: The assigned todo ID
-              example: 1
-            text:
-              type: string
-              description: The todo text
-              example: "Learn Flask"
-      400:
-        description: Invalid request (missing or empty text)
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Missing text field"
-    """
-    global next_id
-
-    # Get JSON data from request body
     data = request.json
-
-    # Validate that 'text' field exists
     if not data or 'text' not in data:
         return jsonify({'error': 'Missing text field'}), 400
-
-    # Validate that text is not empty
     if not data['text'].strip():
         return jsonify({'error': 'Text cannot be empty'}), 400
 
-    # Create new todo with unique ID
-    new_todo = {
-        'id': next_id,
-        'text': data['text'].strip()
-    }
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO todos (text) VALUES (%s) RETURNING id;", (data['text'].strip(),))
+    todo_id = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
 
-    # Add to our in-memory list
-    todos.append(new_todo)
-
-    # Increment ID counter for next todo
-    next_id += 1
-
-    # Return created todo with 201 status (Created)
+    new_todo = {'id': todo_id, 'text': data['text'].strip()}
     return jsonify(new_todo), 201
-
 
 @app.route('/api/todos/<int:todo_id>', methods=['DELETE'])
 def delete_todo(todo_id):
-    """
-    Delete a todo
-    Remove a todo item by its ID
-    ---
-    tags:
-      - todos
-    parameters:
-      - in: path
-        name: todo_id
-        type: integer
-        required: true
-        description: The ID of the todo to delete
-        example: 1
-    responses:
-      204:
-        description: Todo deleted successfully (no content returned)
-      404:
-        description: Todo not found
-        schema:
-          type: object
-          properties:
-            error:
-              type: string
-              example: "Todo not found"
-    """
-    global todos
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM todos WHERE id = %s RETURNING id;", (todo_id,))
+    result = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
 
-    # Find the todo with matching ID
-    todo = next((t for t in todos if t['id'] == todo_id), None)
-
-    if todo is None:
+    if result is None:
         return jsonify({'error': 'Todo not found'}), 404
-
-    # Remove todo from list (filter out the deleted todo)
-    todos = [t for t in todos if t['id'] != todo_id]
-
-    # Return empty response with 204 status (No Content)
     return '', 204
-
 
 @app.route('/')
 def home():
@@ -225,7 +141,6 @@ def home():
             'DELETE /api/todos/<id>': 'Delete a todo'
         }
     })
-
 
 # Run the application
 if __name__ == '__main__':
@@ -243,4 +158,5 @@ if __name__ == '__main__':
     print("\nPress CTRL+C to stop the server")
     print("\nNote: Using port 8000 to avoid conflicts with system services")
 
+    initialize_db()
     app.run(debug=True, host='0.0.0.0', port=8000)
