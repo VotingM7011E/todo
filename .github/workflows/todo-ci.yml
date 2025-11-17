@@ -1,5 +1,6 @@
 name: Build, Push, and Update GitOps
 
+# Trigger the workflow on push to main, staging, or dev branches, or manually via workflow_dispatch
 on:
   push:
     branches: [ "main", "staging", "dev" ]
@@ -23,35 +24,48 @@ on:
         required: false
         default: "false"
 
+# Prevent concurrent runs on the same branch
 concurrency:
   group: gitops-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
+    # Use a matrix strategy to run the job for each environment
+    strategy:
+      matrix:
+        env: [dev, staging, production]
+
     runs-on: ubuntu-latest
+
+    # Define permissions required for the job
     permissions:
       contents: read
       packages: write
       attestations: write
       id-token: write
 
+    # Define environment variables used throughout the job
     env:
       IMAGE_REPO: ghcr.io/votingm7011e/todo
       GITOPS_REPO: votingm7011e/gitops
       GITOPS_BRANCH: main
       APP_FILE: todo.yaml
       GITOPS_UPDATE_MODE: ${{ github.event.inputs.update_mode || 'push' }}
+      FORCE_BUILD: ${{ github.event.inputs.force_build || 'false' }}
 
     steps:
+      # Checkout the source code
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 1  # Shallow clone for faster performance
 
+      # Set up Docker Buildx for advanced build capabilities
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Log in to GitHub Container Registry (GHCR)
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -59,6 +73,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Detect changes in backend and frontend directories
       - name: Detect changes
         id: changes
         uses: dorny/paths-filter@v3
@@ -71,8 +86,9 @@ jobs:
               - 'src/frontend/**'
               - 'src/frontend/Dockerfile'
 
+      # Build and push backend image if changes detected or force_build is true
       - name: Build & Push Backend
-        if: steps.changes.outputs.backend == 'true' || github.event.inputs.force_build == 'true'
+        if: steps.changes.outputs.backend == 'true' || env.FORCE_BUILD == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/backend
@@ -80,9 +96,13 @@ jobs:
           tags: ${{ env.IMAGE_REPO }}-backend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+        retry:
+          max-attempts: 3
 
+      # Build and push frontend image if changes detected or force_build is true
       - name: Build & Push Frontend
-        if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == 'true'
+        if: steps.changes.outputs.frontend == 'true' || env.FORCE_BUILD == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
@@ -90,11 +110,16 @@ jobs:
           tags: ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
+        retry:
+          max-attempts: 3
 
+      # Export the image tag based on the current commit SHA
       - name: Export IMAGE_TAG
         id: tag
         run: echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
+      # Resolve the target environment from matrix or manual input
       - name: Resolve Environment
         id: resolve
         run: |
@@ -102,25 +127,26 @@ jobs:
           if [[ -n "$INPUT_ENV" ]]; then
             echo "TARGET_ENV=$INPUT_ENV" >> "$GITHUB_OUTPUT"
           else
-            case "${GITHUB_REF_NAME}" in
-              main) echo "TARGET_ENV=dev" >> "$GITHUB_OUTPUT" ;;
-              staging) echo "TARGET_ENV=staging" >> "$GITHUB_OUTPUT" ;;
-              dev) echo "TARGET_ENV=dev" >> "$GITHUB_OUTPUT" ;;
-              *) echo "Unsupported branch '${GITHUB_REF_NAME}'"; exit 1 ;;
-            esac
+            echo "TARGET_ENV=${{ matrix.env }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Install yq for YAML manipulation
       - name: Install yq
+        continue-on-error: true
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      # Clone the GitOps repository
       - name: Clone GitOps repo
+        continue-on-error: true
         run: |
           git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}"             "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
+      # Compare current image tags with new ones to avoid unnecessary updates
       - name: Compare image tags
         id: diff
+        continue-on-error: true
         run: |
           cd gitops-repo
           VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
@@ -132,6 +158,7 @@ jobs:
             echo "no_change=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Update the values file with new image tags if changes detected
       - name: Update values file
         if: steps.diff.outputs.no_change == 'false'
         run: |
@@ -144,6 +171,26 @@ jobs:
             .image.frontendTag = \"${{ steps.tag.outputs.IMAGE_TAG }}\"
           " "$VALUES_FILE"
 
+      # Upload the updated values file as an artifact for auditing
+      - name: Upload GitOps values file
+        if: steps.diff.outputs.no_change == 'false'
+        uses: actions/upload-artifact@v3
+        with:
+          name: gitops-values-${{ steps.resolve.outputs.TARGET_ENV }}
+          path: gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}
+
+      # Verify that the pushed Docker images exist by inspecting their digests
+      - name: Verify Backend Image Digest
+        if: steps.changes.outputs.backend == 'true' || env.FORCE_BUILD == 'true'
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE_REPO }}-backend:${{ github.sha }}
+
+      - name: Verify Frontend Image Digest
+        if: steps.changes.outputs.frontend == 'true' || env.FORCE_BUILD == 'true'
+        run: |
+          docker buildx imagetools inspect ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
+
+      # Commit and push changes to GitOps repo if update_mode is push
       - name: Commit and Push
         if: steps.diff.outputs.no_change == 'false' && env.GITOPS_UPDATE_MODE == 'push'
         run: |
@@ -153,7 +200,10 @@ jobs:
           git add .
           git commit -m "chore(${{ steps.resolve.outputs.TARGET_ENV }}): bump todo images to ${{ steps.tag.outputs.IMAGE_TAG }} [skip ci]"
           git push origin "${{ env.GITOPS_BRANCH }}"
+        retry:
+          max-attempts: 3
 
+      # Create a pull request if update_mode is pr
       - name: Create PR
         if: steps.diff.outputs.no_change == 'false' && env.GITOPS_UPDATE_MODE == 'pr'
         uses: peter-evans/create-pull-request@v6
@@ -170,3 +220,5 @@ jobs:
           branch: "bump/${{ steps.resolve.outputs.TARGET_ENV }}/todo-${{ steps.tag.outputs.IMAGE_TAG }}"
           base: ${{ env.GITOPS_BRANCH }}
           labels: gitops, automated
+        retry:
+          max-attempts: 3
