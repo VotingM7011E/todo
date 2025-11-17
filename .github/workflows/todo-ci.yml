@@ -14,18 +14,10 @@ on:
         description: "Target environment (dev/staging/production)"
         required: false
         default: ""
-      update_mode:
-        description: "GitOps update mode (push/pr)"
-        required: false
-        default: "push"
       force_build:
         description: "Force image rebuild even if no changes"
         required: false
         default: "false"
-
-concurrency:
-  group: gitops-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,7 +25,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      attestations: write
       id-token: write
 
     env:
@@ -41,13 +32,10 @@ jobs:
       GITOPS_REPO: votingm7011e/gitops
       GITOPS_BRANCH: main
       APP_FILE: todo.yaml
-      GITOPS_UPDATE_MODE: ${{ github.event.inputs.update_mode || 'push' }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,6 +60,7 @@ jobs:
               - 'src/frontend/Dockerfile'
 
       - name: Build & Push Backend
+        id: build_backend
         if: steps.changes.outputs.backend == 'true' || github.event.inputs.force_build == 'true'
         uses: docker/build-push-action@v6
         with:
@@ -82,6 +71,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build & Push Frontend
+        id: build_frontend
         if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == 'true'
         uses: docker/build-push-action@v6
         with:
@@ -90,10 +80,6 @@ jobs:
           tags: ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Export IMAGE_TAG
-        id: tag
-        run: echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve Environment
         id: resolve
@@ -119,6 +105,16 @@ jobs:
         run: |
           git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}"             "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
+      - name: Compare image tags
+        id: diff
+        run: |
+          cd gitops-repo
+          VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+          CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
+          CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
+          echo "CURRENT_BACKEND_TAG=$CURRENT_BACKEND_TAG" >> "$GITHUB_OUTPUT"
+          echo "CURRENT_FRONTEND_TAG=$CURRENT_FRONTEND_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Update values file
         id: update_values
         run: |
@@ -127,46 +123,33 @@ jobs:
           CHANGED=false
 
           if [[ "${{ steps.changes.outputs.backend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
-            yq -i '
-              .image.backendRepository = "${{ env.IMAGE_REPO }}-backend" |
-              .image.backendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
-            ' "$VALUES_FILE"
-            CHANGED=true
+            if [[ "${{ steps.diff.outputs.CURRENT_BACKEND_TAG }}" != "${{ github.sha }}" ]]; then
+              yq -i '
+                .image.backendRepository = "${{ env.IMAGE_REPO }}-backend" |
+                .image.backendTag = "${{ github.sha }}"
+              ' "$VALUES_FILE"
+              CHANGED=true
+            fi
           fi
 
           if [[ "${{ steps.changes.outputs.frontend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
-            yq -i '
-              .image.frontendRepository = "${{ env.IMAGE_REPO }}-frontend" |
-              .image.frontendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
-            ' "$VALUES_FILE"
-            CHANGED=true
+            if [[ "${{ steps.diff.outputs.CURRENT_FRONTEND_TAG }}" != "${{ github.sha }}" ]]; then
+              yq -i '
+                .image.frontendRepository = "${{ env.IMAGE_REPO }}-frontend" |
+                .image.frontendTag = "${{ github.sha }}"
+              ' "$VALUES_FILE"
+              CHANGED=true
+            fi
           fi
 
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Commit and Push
-        if: steps.update_values.outputs.changed == 'true' && env.GITOPS_UPDATE_MODE == 'push'
+        if: steps.update_values.outputs.changed == 'true'
         run: |
           cd gitops-repo
           git config user.name "GitOps CI"
           git config user.email "actions@github.com"
           git add .
-          git commit -m "chore(${{ steps.resolve.outputs.TARGET_ENV }}): bump todo images to ${{ steps.tag.outputs.IMAGE_TAG }} [skip ci]"
+          git commit -m "chore(${{ steps.resolve.outputs.TARGET_ENV }}): update todo image tags to ${{ github.sha }} [skip ci]"
           git push origin "${{ env.GITOPS_BRANCH }}"
-
-      - name: Create PR
-        if: steps.update_values.outputs.changed == 'true' && env.GITOPS_UPDATE_MODE == 'pr'
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITOPS_TOKEN }}
-          commit-message: "chore(${{ steps.resolve.outputs.TARGET_ENV }}): bump todo images to ${{ steps.tag.outputs.IMAGE_TAG }} [skip ci]"
-          title: "chore(${{ steps.resolve.outputs.TARGET_ENV }}): bump todo images to ${{ steps.tag.outputs.IMAGE_TAG }}"
-          body: |
-            Automated image bump:
-            - Backend: `${{ env.IMAGE_REPO }}-backend`
-            - Frontend: `${{ env.IMAGE_REPO }}-frontend`
-            - Tag: `${{ steps.tag.outputs.IMAGE_TAG }}`
-            - Environment: `${{ steps.resolve.outputs.TARGET_ENV }}`
-          branch: "bump/${{ steps.resolve.outputs.TARGET_ENV }}/todo-${{ steps.tag.outputs.IMAGE_TAG }}"
-          base: ${{ env.GITOPS_BRANCH }}
-          labels: gitops, automated
