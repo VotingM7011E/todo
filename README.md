@@ -1,3 +1,42 @@
+# Todo App Project
+
+## 📦 Project Overview
+
+The Todo App is a containerized full-stack application consisting of a frontend and backend. It is deployed using GitOps principles via Argo CD. The CI/CD pipeline builds and pushes Docker images to GitHub Container Registry (GHCR) and updates the GitOps repository with new image tags.
+
+---
+
+## ⚙️ CI/CD Pipeline Documentation
+
+The CI/CD pipeline is implemented using GitHub Actions. It performs the following steps:
+
+1. Detects changes in `src/frontend` or `src/backend`.
+2. Builds and pushes Docker images to GHCR if changes are detected.
+3. Uses `github.sha` as the image tag if built, otherwise fetches the latest tag from GHCR.
+4. Updates the GitOps values file for the appropriate environment (`dev`, `staging`, `production`).
+5. Commits changes directly or opens a pull request based on `update_mode`.
+
+---
+
+## CI/CD Architecture
+
+```mermaid
+flowchart TD
+    A[Developer pushes code] --> B[GitHub Actions CI]
+    B --> C{Changes detected?}
+    C -->|Yes| D[Build Docker images]
+    D --> E[Push to GHCR]
+    E --> F[Update GitOps repo]
+    F --> G{Update mode}
+    G -->|push| H[Direct commit to GitOps repo]
+    G -->|pr| I[Create pull request]
+    H & I --> J[Argo CD sync]
+    J --> K[Kubernetes deployment]
+```
+---
+
+
+
 ### Testing
 
 ```bash
