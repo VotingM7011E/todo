@@ -119,33 +119,33 @@ jobs:
         run: |
           git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}"             "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
-      - name: Compare image tags
-        id: diff
+      - name: Update values file
+        id: update_values
         run: |
           cd gitops-repo
           VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
-          CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
-          CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
-          if [[ "$CURRENT_BACKEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" || "$CURRENT_FRONTEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" ]]; then
-            echo "no_change=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "no_change=false" >> "$GITHUB_OUTPUT"
+          CHANGED=false
+
+          if [[ "${{ steps.changes.outputs.backend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            yq -i '
+              .image.backendRepository = "${{ env.IMAGE_REPO }}-backend" |
+              .image.backendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
+            ' "$VALUES_FILE"
+            CHANGED=true
           fi
 
-      - name: Update values file
-        if: steps.diff.outputs.no_change == 'false'
-        run: |
-          cd gitops-repo
-          VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
-          yq -i "
-            .image.backendRepository = \"${{ env.IMAGE_REPO }}-backend\" |
-            .image.backendTag = \"${{ steps.tag.outputs.IMAGE_TAG }}\" |
-            .image.frontendRepository = \"${{ env.IMAGE_REPO }}-frontend\" |
-            .image.frontendTag = \"${{ steps.tag.outputs.IMAGE_TAG }}\"
-          " "$VALUES_FILE"
+          if [[ "${{ steps.changes.outputs.frontend }}" == "true" || "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            yq -i '
+              .image.frontendRepository = "${{ env.IMAGE_REPO }}-frontend" |
+              .image.frontendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
+            ' "$VALUES_FILE"
+            CHANGED=true
+          fi
+
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
 
       - name: Commit and Push
-        if: steps.diff.outputs.no_change == 'false' && env.GITOPS_UPDATE_MODE == 'push'
+        if: steps.update_values.outputs.changed == 'true' && env.GITOPS_UPDATE_MODE == 'push'
         run: |
           cd gitops-repo
           git config user.name "GitOps CI"
@@ -155,7 +155,7 @@ jobs:
           git push origin "${{ env.GITOPS_BRANCH }}"
 
       - name: Create PR
-        if: steps.diff.outputs.no_change == 'false' && env.GITOPS_UPDATE_MODE == 'pr'
+        if: steps.update_values.outputs.changed == 'true' && env.GITOPS_UPDATE_MODE == 'pr'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ secrets.GITOPS_TOKEN }}
