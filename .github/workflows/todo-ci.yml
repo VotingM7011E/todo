@@ -126,7 +126,7 @@ jobs:
           VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
           CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
           CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
-          if [[ "$CURRENT_BACKEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" && "$CURRENT_FRONTEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" ]]; then
+          if [[ "$CURRENT_BACKEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" || "$CURRENT_FRONTEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" ]]; then
             echo "no_change=true" >> "$GITHUB_OUTPUT"
           else
             echo "no_change=false" >> "$GITHUB_OUTPUT"
