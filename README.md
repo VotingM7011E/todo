@@ -1,3 +1,13 @@
+### Testing
+
+```bash
+backend-tests/
+├── requirements.txt       # pytest, psycopg2, etc.
+├── test_api.py            # Flask API endpoint tests
+├── test_integration.py    # DB integration tests
+└── test_unit.py           # Unit tests with mocks
+```
+
 ### ⚠️ Known Issue: Stateless Backend with Multiple Replicas
 
 When running multiple backend replicas, each pod stores todos **in-memory**. Because Kubernetes load-balances requests across pods, refreshing the page may show an empty list if the request hits a different pod.
