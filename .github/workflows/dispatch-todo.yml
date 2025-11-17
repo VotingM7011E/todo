@@ -1,0 +1,31 @@
+name: Dispatch Todo App CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Target environment (dev/staging/production)"
+        required: true
+        default: "dev"
+      update_mode:
+        description: "GitOps update mode (push/pr)"
+        required: true
+        default: "push"
+      force_build:
+        description: "Force image rebuild even if no changes"
+        required: true
+        default: "false"
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Todo App CI
+        uses: benc-uk/workflow-dispatch@v1
+        with:
+          workflow: Build, Push, and Update GitOps
+          token: ${{ secrets.GITHUB_TOKEN }}
+          inputs: |
+            env=${{ github.event.inputs.env }}
+            update_mode=${{ github.event.inputs.update_mode }}
+            force_build=${{ github.event.inputs.force_build }}

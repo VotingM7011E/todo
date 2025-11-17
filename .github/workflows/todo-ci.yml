@@ -18,6 +18,10 @@ on:
         description: "GitOps update mode (push/pr)"
         required: false
         default: "push"
+      force_build:
+        description: "Force image rebuild even if no changes"
+        required: false
+        default: "false"
 
 concurrency:
   group: gitops-${{ github.ref }}
@@ -68,8 +72,7 @@ jobs:
               - 'src/frontend/Dockerfile'
 
       - name: Build & Push Backend
-        if: steps.changes.outputs.backend == 'true'
-        id: build_backend
+        if: steps.changes.outputs.backend == 'true' || github.event.inputs.force_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/backend
@@ -79,8 +82,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Build & Push Frontend
-        if: steps.changes.outputs.frontend == 'true'
-        id: build_frontend
+        if: steps.changes.outputs.frontend == 'true' || github.event.inputs.force_build == ' 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
@@ -124,12 +126,10 @@ jobs:
           VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
           CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
           CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
-          BACKEND_BUILT="${{ steps.changes.outputs.backend }}"
-          FRONTEND_BUILT="${{ steps.changes.outputs.frontend }}"
-          if [[ "$BACKEND_BUILT" == "true" || "$FRONTEND_BUILT" == "true" ]]; then
-            echo "no_change=false" >> "$GITHUB_OUTPUT"
-          else
+          if [[ "$CURRENT_BACKEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" && "$CURRENT_FRONTEND_TAG" == "${{ steps.tag.outputs.IMAGE_TAG }}" ]]; then
             echo "no_change=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no_change=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update values file
@@ -137,17 +137,12 @@ jobs:
         run: |
           cd gitops-repo
           VALUES_FILE="environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
-          if [[ "${{ steps.changes.outputs.backend }}" == "true" ]]; then
-            yq -i "
-              .image.backendRepository = "${{ env.IMAGE_REPO }}-backend" |
-              .image.backendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
-            " "$VALUES_FILE"
-          fi
-          if [[ "${{ steps.changes.outputs.frontend }}" == "true" ]]; then
-            yq -i "
-              .image.frontendRepository = "${{ env.IMAGE_REPO }}-frontend" |
-              .image.frontendTag = "${{ steps.tag.outputs.IMAGE_TAG }}"
-            " "$VALUES_FILE"
+          yq -i "
+            .image.backendRepository = \"${{ env.IMAGE_REPO }}-backend\" |
+            .image.backendTag = \"${{ steps.tag.outputs.IMAGE_TAG }}\" |
+            .image.frontendRepository = \"${{ env.IMAGE_REPO }}-frontend\" |
+            .image.frontendTag = \"${{ steps.tag.outputs.IMAGE_TAG }}\"
+          " "$VALUES_FILE"
 
       - name: Commit and Push
         if: steps.diff.outputs.no_change == 'false' && env.GITOPS_UPDATE_MODE == 'push'
