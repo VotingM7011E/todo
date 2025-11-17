@@ -170,7 +170,7 @@ jobs:
       # Upload the updated values file as an artifact for auditing
       - name: Upload GitOps values file
         if: steps.diff.outputs.no_change == 'false'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: gitops-values-${{ steps.resolve.outputs.TARGET_ENV }}
           path: gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}
