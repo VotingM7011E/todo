@@ -119,7 +119,7 @@ jobs:
           fi
 
           if [[ "$CURRENT_FRONTEND_TAG" != "$FRONTEND_TAG" ]]; then
-            yq -i ".image.frontendTag = \"${FRONTEND_TAG}\"" "$VALUES_FILE
+            yq -i ".image.frontendTag = \"${FRONTEND_TAG}\"" "$VALUES_FILE"
             CHANGED=true
           fi
 
