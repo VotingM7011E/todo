@@ -114,12 +114,12 @@ jobs:
           CHANGED=false
 
           if [[ "$CURRENT_BACKEND_TAG" != "$BACKEND_TAG" ]]; then
-            yq -i ".image.backendTag = "$BACKEND_TAG"" "$VALUES_FILE"
+            yq -i ".image.backendTag = \"${BACKEND_TAG}\"" "$VALUES_FILE"
             CHANGED=true
           fi
 
           if [[ "$CURRENT_FRONTEND_TAG" != "$FRONTEND_TAG" ]]; then
-            yq -i ".image.frontendTag = "$FRONTEND_TAG"" "$VALUES_FILE"
+            yq -i ".image.frontendTag = \"${FRONTEND_TAG}\"" "$VALUES_FILE
             CHANGED=true
           fi
 
