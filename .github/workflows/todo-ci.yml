@@ -1,29 +1,33 @@
-name: Build, Push, and Update GitOps
+name: Build, Push, and Update GitOps for Todo App
 
 on:
   push:
     branches: [ "main", "staging", "dev" ]
-    paths:
-      - 'src/**'
-      - 'Dockerfile'
-      - '.github/workflows/**'
-      - '!**/*.md'
+
+concurrency:
+  group: gitops-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPO: ghcr.io/votingm7011e/todo
+  GITOPS_REPO: votingm7011e/gitops
+  GITOPS_BRANCH: main
+  APP_FILE: todo.yaml
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      IMAGE_REPO: ghcr.io/votingm7011e/todo
-      GITOPS_REPO: votingm7011e/gitops
-      GITOPS_BRANCH: main
-      APP_FILE: todo.yaml
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        with:
+          fetch-depth: 1
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -33,104 +37,96 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Detect changes
-        id: changes
+        id: filter
         uses: dorny/paths-filter@v3
         with:
           filters: |
             backend:
               - 'src/backend/**'
+              - 'Dockerfile.backend'
+              - '.github/workflows/**'
             frontend:
               - 'src/frontend/**'
+              - 'Dockerfile.frontend'
+              - '.github/workflows/**'
 
-      - name: Build & Push Backend
-        id: build_backend
-        if: steps.changes.outputs.backend == 'true'
+      - name: Stop early if no build needed
+        if: steps.filter.outputs.backend != 'true' && steps.filter.outputs.frontend != 'true'
+        run: echo "No relevant changes; skipping." && exit 0
+
+      - name: Extract metadata for Backend
+        id: meta_backend
+        if: steps.filter.outputs.backend == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REPO }}-backend
+          tags: |
+            type=raw,value=${{ github.sha }}
+
+      - name: Extract metadata for Frontend
+        id: meta_frontend
+        if: steps.filter.outputs.frontend == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_REPO }}-frontend
+          tags: |
+            type=raw,value=${{ github.sha }}
+
+      - name: Build and push Backend image
+        if: steps.filter.outputs.backend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/backend
+          file: Dockerfile.backend
           push: true
-          tags: ${{ env.IMAGE_REPO }}-backend:${{ github.sha }}
+          tags: ${{ steps.meta_backend.outputs.tags }}
+          labels: ${{ steps.meta_backend.outputs.labels }}
 
-      - name: Build & Push Frontend
-        id: build_frontend
-        if: steps.changes.outputs.frontend == 'true'
+      - name: Build and push Frontend image
+        if: steps.filter.outputs.frontend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
+          file: Dockerfile.frontend
           push: true
-          tags: ${{ env.IMAGE_REPO }}-frontend:${{ github.sha }}
+          tags: ${{ steps.meta_frontend.outputs.tags }}
+          labels: ${{ steps.meta_frontend.outputs.labels }}
 
-      - name: Set backend tag
-        id: backend_tag
+      - name: Resolve target environment
+        id: resolve
+        shell: bash
         run: |
-          if [[ "${{ steps.changes.outputs.backend }}" == "true" ]]; then
-            echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          else
-            TAG=$(curl -s \
-                    -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                    -H "Accept: application/vnd.github+json" \
-                    https://api.github.com/orgs/VotingM7011E/packages/container/todo-backend/versions \
-                    | jq -r '.[0].metadata.container.tags[0]'
-                  )            
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Set frontend tag
-        id: frontend_tag
-        run: |
-          if [[ "${{ steps.changes.outputs.frontend }}" == "true" ]]; then
-            echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          else
-            TAG=$(curl -s \
-                    -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                    -H "Accept: application/vnd.github+json" \
-                    https://api.github.com/orgs/VotingM7011E/packages/container/todo-frontend/versions \
-                    | jq -r '.[0].metadata.container.tags[0]'
-                  )
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Install yq
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          case "${GITHUB_REF_NAME}" in
+            main)    TARGET_ENV="dev" ;;
+            staging) TARGET_ENV="staging" ;;
+            dev)     TARGET_ENV="dev" ;;
+            *) echo "Unsupported branch '${GITHUB_REF_NAME}'."; exit 1 ;;
+          esac
+          echo "TARGET_ENV=$TARGET_ENV" >> "$GITHUB_OUTPUT"
 
       - name: Clone GitOps repo
         run: |
           git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}" "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
-      - name: Compare and update GitOps values
-        id: update_values
-        run: |
-          cd gitops-repo
-          VALUES_FILE="environments/dev/${{ env.APP_FILE }}"
+      - name: Update backend tag in GitOps file
+        if: steps.filter.outputs.backend == 'true'
+        uses: mikefarah/yq@master
+        with:
+          cmd: >
+            yq eval '.image.backend.tag = "${{ steps.meta_backend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
-          CURRENT_BACKEND_TAG=$(yq '.image.backendTag' "$VALUES_FILE")
-          CURRENT_FRONTEND_TAG=$(yq '.image.frontendTag' "$VALUES_FILE")
+      - name: Update frontend tag in GitOps file
+        if: steps.filter.outputs.frontend == 'true'
+        uses: mikefarah/yq@master
+        with:
+          cmd: >
+            yq eval '.image.frontend.tag = "${{ steps.meta_frontend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
-          BACKEND_TAG="${{ steps.backend_tag.outputs.tag }}"
-          FRONTEND_TAG="${{ steps.frontend_tag.outputs.tag }}"
-
-          CHANGED=false
-
-          if [[ "$CURRENT_BACKEND_TAG" != "$BACKEND_TAG" ]]; then
-            yq -i ".image.backendTag = \"${BACKEND_TAG}\"" "$VALUES_FILE"
-            CHANGED=true
-          fi
-
-          if [[ "$CURRENT_FRONTEND_TAG" != "$FRONTEND_TAG" ]]; then
-            yq -i ".image.frontendTag = \"${FRONTEND_TAG}\"" "$VALUES_FILE"
-            CHANGED=true
-          fi
-
-          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
-
-      - name: Commit and Push
-        if: steps.update_values.outputs.changed == 'true'
+      - name: Commit and push GitOps update
         run: |
           cd gitops-repo
           git config user.name "GitOps CI"
           git config user.email "actions@github.com"
           git add .
-          git commit -m "chore: update image tags [skip ci]"
-          git push origin "${{ env.GITOPS_BRANCH }}"
+          git commit -m "chore: update image tags [skip ci]" || echo "No changes to commit"
+          git push origin "${{ env.GITOPS_BRANCH }}" || (sleep 5 && git push origin "${{ env.GITOPS_BRANCH }}")
