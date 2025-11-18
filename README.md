@@ -8,6 +8,8 @@ The Todo App is a containerized full-stack application consisting of a frontend 
 
 ## ⚙️ CI/CD Pipeline Documentation
 
+The CI/CD pipeline builds and deploys backend and frontend components independently.
+
 The CI/CD pipeline is implemented using GitHub Actions. It performs the following steps:
 
 1. Detects changes in `src/frontend` or `src/backend`.
@@ -15,6 +17,18 @@ The CI/CD pipeline is implemented using GitHub Actions. It performs the followin
 3. Uses `github.sha` as the image tag if built, otherwise fetches the latest tag from GHCR.
 4. Updates the GitOps values file for the appropriate environment (`dev`, `staging`, `production`).
 5. Commits changes directly or opens a pull request based on `update_mode`.
+
+
+### Backend and Frontend Separation
+- Changes to `src/backend/**` or workflow files trigger a backend build.
+- Changes to `src/frontend/**` or workflow files trigger a frontend build.
+- Each component is built and pushed to its respective GHCR repository:
+  - Backend → `ghcr.io/votingm7011e/todo-backend`
+  - Frontend → `ghcr.io/votingm7011e/todo-frontend`
+- The GitOps values file is updated with:
+  - `image.backendTag` for backend
+  - `image.frontendTag` for frontend
+- Argo CD auto-syncs the updated manifests to the cluster.
 
 ### CI/CD Architecture
 
