@@ -43,11 +43,9 @@ jobs:
           filters: |
             backend:
               - 'src/backend/**'
-              - 'Dockerfile.backend'
               - '.github/workflows/**'
             frontend:
               - 'src/frontend/**'
-              - 'Dockerfile.frontend'
               - '.github/workflows/**'
 
       - name: Stop early if no build needed
@@ -77,7 +75,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./src/backend
-          file: Dockerfile.backend
           push: true
           tags: ${{ steps.meta_backend.outputs.tags }}
           labels: ${{ steps.meta_backend.outputs.labels }}
@@ -87,7 +84,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./src/frontend
-          file: Dockerfile.frontend
           push: true
           tags: ${{ steps.meta_frontend.outputs.tags }}
           labels: ${{ steps.meta_frontend.outputs.labels }}
