@@ -15,31 +15,30 @@ env:
   APP_FILE: todo.yaml
 
 jobs:
-  # JOB to run change detection
+  # Detect changes
   changes:
     runs-on: ubuntu-latest
-    # Required permissions
     permissions:
       pull-requests: read
-    # Set job outputs to values from filter step
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
-    # For pull requests it's not necessary to checkout the code
-    - uses: dorny/paths-filter@v3
-      id: filter
-      with:
-        filters: |
-          backend:
-            - 'src/backend/**'
-            - '.github/workflows/**'
-          frontend:
-            - 'src/frontend/**'
-            - '.github/workflows/**'
-  # Test backend before building
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/backend/**'
+              - '.github/workflows/**'
+            frontend:
+              - 'src/frontend/**'
+              - '.github/workflows/**'
+
+  # Backend tests
   test-backend:
-    name: Backend Tests
     runs-on: ubuntu-latest
     #services:
       #postgres:
@@ -59,12 +58,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
-
       - name: Install dependencies
         run: |
           pip install -r backend-tests/requirements.txt
@@ -84,7 +81,6 @@ jobs:
 
       - name: Run API tests
         run: |
-          # Start the backend server in the background
           python src/backend/app.py &
           sleep 5
           pytest backend-tests/test_api.py -v
@@ -101,9 +97,7 @@ jobs:
 
   # Requires passed frontend tests and changes
   build-frontend:
-    needs:
-      - changes
-      #- test-frontend
+    needs: [ changes ]
     if: ${{ needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -111,20 +105,15 @@ jobs:
       packages: write
       attestations: write
       id-token: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata for Frontend
         id: meta_frontend
         uses: docker/metadata-action@v5
@@ -132,7 +121,6 @@ jobs:
           images: ${{ env.IMAGE_REPO }}-frontend
           tags: |
             type=raw,value=${{ github.sha }}
-
       - name: Build and push Frontend image
         uses: docker/build-push-action@v6
         with:
@@ -141,11 +129,9 @@ jobs:
           tags: ${{ steps.meta_frontend.outputs.tags }}
           labels: ${{ steps.meta_frontend.outputs.labels }}
 
-  # Requires passed backend tests and changes
+  # Build backend image
   build-backend:
-    needs:
-      - changes
-      - test-backend
+    needs: [ changes, test-backend ]
     if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     permissions:
@@ -153,20 +139,15 @@ jobs:
       packages: write
       attestations: write
       id-token: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata for Backend
         id: meta_backend
         uses: docker/metadata-action@v5
@@ -174,7 +155,6 @@ jobs:
           images: ${{ env.IMAGE_REPO }}-backend
           tags: |
             type=raw,value=${{ github.sha }}
-
       - name: Build and push Backend image
         uses: docker/build-push-action@v6
         with:
@@ -183,11 +163,9 @@ jobs:
           tags: ${{ steps.meta_backend.outputs.tags }}
           labels: ${{ steps.meta_backend.outputs.labels }}
 
-  # Only bother updating Gitops repo if any new images has been built
+  # Update GitOps repo if any image was built
   update-gitops:
-    needs:
-      - build-frontend
-      - build-backend
+    needs: [ build-frontend, build-backend ]
     if: ${{ needs.build-backend.result == 'success' || needs.build-frontend.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -195,34 +173,36 @@ jobs:
       packages: write
       attestations: write
       id-token: write
-
     steps:
       - name: Resolve target environment
         id: resolve
-        shell: bash
         run: |
           case "${GITHUB_REF_NAME}" in
-            main)    TARGET_ENV="dev" ;;
+            main) TARGET_ENV="dev" ;;   # Only during testing of workflow
             staging) TARGET_ENV="staging" ;;
-            dev)     TARGET_ENV="dev" ;;
-            *) echo "Unsupported branch '${GITHUB_REF_NAME}'."; exit 1 ;;
+            dev) TARGET_ENV="dev" ;;
+            *) echo "Unsupported branch '${GITHUB_REF_NAME}'"; exit 1 ;;
           esac
           echo "TARGET_ENV=$TARGET_ENV" >> "$GITHUB_OUTPUT"
+
       - name: Clone GitOps repo
         run: |
-          git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}" "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
+          git clone --depth 1 --branch "${{ env.GITOPS_BRANCH }}" \
+          "https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/${{ env.GITOPS_REPO }}.git" gitops-repo
 
       - name: Update backendTag in GitOps file
         uses: mikefarah/yq@master
         with:
           cmd: >
-            yq eval '.image.backendTag = "${{ steps.meta_backend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+            yq eval '.image.backendTag = "${{ steps.meta_backend.outputs.tag-names }}"' \
+            -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
       - name: Update frontendTag in GitOps file
         uses: mikefarah/yq@master
         with:
           cmd: >
-            yq eval '.image.frontendTag = "${{ steps.meta_frontend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+            yq eval '.image.frontendTag = "${{ steps.meta_frontend.outputs.tag-names }}"' \
+            -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
       - name: Commit and push GitOps update
         run: |
@@ -231,4 +211,4 @@ jobs:
           git config user.email "actions@github.com"
           git add .
           git commit -m "chore: update image tags [skip ci]" || echo "No changes to commit"
-          git push origin "${{ env.GITOPS_BRANCH }}" || (sleep 5 && git push origin "${{ env.GITOPS_BRANCH }}")
+          git push origin "${{ env.GITOPS_BRANCH }}"
