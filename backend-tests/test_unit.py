@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import patch, Mock
+
+# Add the path to the backend source code
 import sys
-sys.path.append("../src/backend")
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src/backend")))
+
 import todo_service
 
 
