@@ -105,6 +105,8 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+    outputs:
+      frontend_tag: ${{ steps.meta_frontend.outputs.tag-names }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -139,6 +141,8 @@ jobs:
       packages: write
       attestations: write
       id-token: write
+    outputs:
+      backend_tag: ${{ steps.meta_backend.outputs.tag-names }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -194,13 +198,13 @@ jobs:
         uses: mikefarah/yq@master
         with:
           cmd: >
-            yq eval '.image.backendTag = "${{ steps.meta_backend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+            yq eval '.image.backendTag = "${{ needs.build-backend.outputs.backend_tag }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
       - name: Update frontendTag in GitOps file
         uses: mikefarah/yq@master
         with:
           cmd: >
-            yq eval '.image.frontendTag = "${{ steps.meta_frontend.outputs.tag-names }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
+            yq eval '.image.frontendTag = "${{ needs.build-frontend.outputs.frontend_tag }}"' -i "gitops-repo/environments/${{ steps.resolve.outputs.TARGET_ENV }}/${{ env.APP_FILE }}"
 
       - name: Commit and push GitOps update
         run: |
