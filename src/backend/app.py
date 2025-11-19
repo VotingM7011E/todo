@@ -1,162 +1,143 @@
-"""
-Simple Todo List REST API
-
-This Flask application demonstrates basic REST API principles:
-- GET /api/todos - Retrieve all todos
-- POST /api/todos - Create a new todo
-- DELETE /api/todos/<id> - Delete a todo
-
-Data is stored in-memory (resets when server restarts).
-In a real application, you would use a database.
-"""
-
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flasgger import Swagger
+from flasgger import Swagger, swag_from
+from todo_service import get_todos, create_todo, delete_todo, initialize_db
 
-import os
-import psycopg2
-
-def get_db_connection():
-    return psycopg2.connect(
-        host=os.getenv("POSTGRES_HOST", "localhost"),
-        database=os.getenv("POSTGRES_DB", "tododb"),
-        user=os.getenv("POSTGRES_USER", "postgres"),
-        password=os.getenv("POSTGRES_PASSWORD", "postgres")
-    )
-
-def initialize_db():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS todos (
-            id SERIAL PRIMARY KEY,
-            text TEXT NOT NULL
-        );
-    """)
-    conn.commit()
-    cur.close()
-    conn.close()
-
-# Initialize Flask application
 app = Flask(__name__)
-
-# Enable CORS to allow requests from frontend (different port/origin)
-# Configure CORS to allow requests from any origin for development
-CORS(app, resources={
-    r"/api/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
-
-# Configure Swagger UI for API documentation
-swagger_config = {
-    "headers": [],
-    "specs": [
-        {
-            "endpoint": 'apispec',
-            "route": '/apispec.json',
-            "rule_filter": lambda rule: True,
-            "model_filter": lambda tag: True,
-        }
-    ],
-    "static_url_path": "/flasgger_static",
-    "swagger_ui": True,
-    "specs_route": "/api-docs"
-}
+CORS(app)
 
 swagger_template = {
+    "swagger": "2.0",
     "info": {
-        "title": "Todo List REST API",
-        "description": "A simple REST API for managing todo items. This demonstrates basic CRUD operations using REST principles.",
+        "title": "Todo List API",
+        "description": "API for managing a simple todo list",
         "version": "1.0.0"
     },
-    "schemes": ["http"],
+    "basePath": "/",
     "tags": [
         {
-            "name": "todos",
-            "description": "Todo item operations"
+            "name": "Todos",
+            "description": "Operations related to todo items"
         }
     ]
 }
 
-swagger = Swagger(app, config=swagger_config, template=swagger_template)
+swagger = Swagger(app, template=swagger_template)
 
-@app.route('/api/todos', methods=['GET'])
-def get_todos():
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, text FROM todos;")
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    todos = [{'id': row[0], 'text': row[1]} for row in rows]
-    return jsonify(todos), 200
+@app.route("/api/todos", methods=["GET"])
+@swag_from({
+    "tags": ["Todos"],
+    "summary": "Get all todos",
+    "description": "Retrieve a list of all todo items.",
+    "responses": {
+        "200": {
+            "description": "A list of todo items",
+            "schema": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "text": {"type": "string"}
+                    }
+                }
+            }
+        }
+    }
+})
+def list_todos():
+    return jsonify(get_todos()), 200
 
-@app.route('/api/todos', methods=['POST'])
-def create_todo():
-    data = request.json
-    if not data or 'text' not in data:
-        return jsonify({'error': 'Missing text field'}), 400
-    if not data['text'].strip():
-        return jsonify({'error': 'Text cannot be empty'}), 400
+@app.route("/api/todos", methods=["POST"])
+@swag_from({
+    "tags": ["Todos"],
+    "summary": "Create a new todo",
+    "description": "Add a new todo item to the list.",
+    "parameters": [
+        {
+            "name": "body",
+            "in": "body",
+            "required": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"}
+                },
+                "required": ["text"]
+            }
+        }
+    ],
+    "responses": {
+        "201": {
+            "description": "Todo item created successfully",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "text": {"type": "string"}
+                }
+            }
+        },
+        "400": {
+            "description": "Invalid input"
+        }
+    }
+})
+def add_todo():
+    data = request.get_json()
+    if not data or "text" not in data:
+        return jsonify({"error": "Missing text field"}), 400
+    try:
+        new_todo = create_todo(data["text"].strip())
+        return jsonify(new_todo), 201
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO todos (text) VALUES (%s) RETURNING id;", (data['text'].strip(),))
-    todo_id = cur.fetchone()[0]
-    conn.commit()
-    cur.close()
-    conn.close()
+@app.route("/api/todos/<int:todo_id>", methods=["DELETE"])
+@swag_from({
+    "tags": ["Todos"],
+    "summary": "Delete a todo",
+    "description": "Delete a todo item by its ID.",
+    "parameters": [
+        {
+            "name": "todo_id",
+            "in": "path",
+            "type": "integer",
+            "required": True,
+            "description": "ID of the todo item to delete"
+        }
+    ],
+    "responses": {
+        "204": {
+            "description": "Todo item deleted successfully"
+        },
+        "404": {
+            "description": "Todo item not found"
+        }
+    }
+})
+def remove_todo(todo_id):
+    try:
+        delete_todo(todo_id)
+        return jsonify({"message": f"Todo with id {todo_id} deleted"}), 200
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception:
+        return jsonify({"error": "Internal server error"}), 500
 
-    new_todo = {'id': todo_id, 'text': data['text'].strip()}
-    return jsonify(new_todo), 201
-
-@app.route('/api/todos/<int:todo_id>', methods=['DELETE'])
-def delete_todo(todo_id):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM todos WHERE id = %s RETURNING id;", (todo_id,))
-    result = cur.fetchone()
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if result is None:
-        return jsonify({'error': 'Todo not found'}), 404
-    return '', 204
-
-@app.route('/')
+@app.route("/")
 def home():
-    """
-    Root endpoint - provides API information
-    """
     return jsonify({
-        'message': 'Todo List REST API',
-        'endpoints': {
-            'GET /api/todos': 'Get all todos',
-            'POST /api/todos': 'Create a new todo',
-            'DELETE /api/todos/<id>': 'Delete a todo'
+        "message": "Todo List REST API",
+        "endpoints": {
+            "GET /api/todos": "Get all todos",
+            "POST /api/todos": "Create a new todo",
+            "DELETE /api/todos/<id>": "Delete a todo"
         }
     })
 
-# Run the application
-if __name__ == '__main__':
-    # debug=True enables auto-reload and detailed error messages
-    # Don't use debug=True in production!
-    print("Starting Flask server...")
-    print("API will be available at: http://localhost:8000")
-    print("\nAPI endpoints:")
-    print("  GET    http://localhost:8000/api/todos")
-    print("  POST   http://localhost:8000/api/todos")
-    print("  DELETE http://localhost:8000/api/todos/<id>")
-    print("\nSwagger API Documentation:")
-    print("  http://localhost:8000/api-docs")
-    print("  (Interactive API testing and documentation)")
-    print("\nPress CTRL+C to stop the server")
-    print("\nNote: Using port 8000 to avoid conflicts with system services")
-
+if __name__ == "__main__":
     initialize_db()
-    app.run(debug=True, host='0.0.0.0', port=8000)
+    app.run(debug=True, host="0.0.0.0", port=8000)

@@ -1,144 +1,86 @@
 import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime
+from unittest.mock import patch, Mock
 import sys
-sys.path.append('../examples')
+sys.path.append("../src/backend")
+import todo_service
 
-from todo_service import create_todo, get_todos_by_user, mark_todo_complete
 
-class TestCreateTodo:
-    """Unit tests for create_todo function"""
-
-    @patch('todo_service.get_db_connection')
-    def test_create_todo_success(self, mock_get_db):
-        """Test creating a todo successfully"""
-        # Arrange
+class TestGetTodos:
+    @patch("todo_service.get_db_connection")
+    def test_get_todos_returns_list(self, mock_get_db):
         mock_conn = Mock()
         mock_cursor = Mock()
-        mock_cursor.fetchone.return_value = [123]
+        mock_cursor.fetchall.return_value = [(1, "Buy milk"), (2, "Walk dog")]
         mock_conn.cursor.return_value = mock_cursor
         mock_get_db.return_value = mock_conn
 
-        # Act
-        todo_id = create_todo('Buy milk', 'From the store', 1)
+        todos = todo_service.get_todos()
 
-        # Assert
-        assert todo_id == 123
-        mock_cursor.execute.assert_called_once()
+        assert todos == [
+            {"id": 1, "text": "Buy milk"},
+            {"id": 2, "text": "Walk dog"},
+        ]
+        mock_cursor.execute.assert_called_once_with("SELECT id, text FROM todos ORDER BY id;")
+        mock_conn.commit.assert_not_called()
+        mock_cursor.close.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+
+class TestCreateTodo:
+    def test_create_todo_empty_text_raises(self):
+        with pytest.raises(ValueError, match="Text is required"):
+            todo_service.create_todo("")
+
+    def test_create_todo_text_too_long_raises(self):
+        long_text = "a" * 201
+        with pytest.raises(ValueError, match="Text too long"):
+            todo_service.create_todo(long_text)
+
+    @patch("todo_service.get_db_connection")
+    def test_create_todo_success(self, mock_get_db):
+        mock_conn = Mock()
+        mock_cursor = Mock()
+        mock_cursor.fetchone.return_value = [42]
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_db.return_value = mock_conn
+
+        result = todo_service.create_todo("Read a book")
+
+        assert result == {"id": 42, "text": "Read a book"}
+        mock_cursor.execute.assert_called_once_with(
+            "INSERT INTO todos (text) VALUES (%s) RETURNING id;", ("Read a book",)
+        )
         mock_conn.commit.assert_called_once()
         mock_cursor.close.assert_called_once()
         mock_conn.close.assert_called_once()
 
-    @patch('todo_service.get_db_connection')
-    def test_create_todo_empty_title_fails(self, mock_get_db):
-        """Test that empty title raises ValueError"""
-        # Act & Assert
-        with pytest.raises(ValueError, match="Title is required"):
-            create_todo('', 'Description', 1)
 
-        # Database should not be called
-        mock_get_db.assert_not_called()
-
-    @patch('todo_service.get_db_connection')
-    def test_create_todo_long_title_fails(self, mock_get_db):
-        """Test that title > 200 chars raises ValueError"""
-        long_title = 'a' * 201
-
-        # Act & Assert
-        with pytest.raises(ValueError, match="Title too long"):
-            create_todo(long_title, 'Description', 1)
-
-        # Database should not be called
-        mock_get_db.assert_not_called()
-
-class TestGetTodosByUser:
-    """Unit tests for get_todos_by_user function"""
-
-    @patch('todo_service.get_db_connection')
-    def test_get_todos_returns_list(self, mock_get_db):
-        """Test getting todos returns correct format"""
-        # Arrange
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.fetchall.return_value = [
-            (1, 'Buy milk', 'From store', False, datetime(2024, 1, 15, 10, 30)),
-            (2, 'Walk dog', 'In park', True, datetime(2024, 1, 15, 11, 0))
-        ]
-        mock_conn.cursor.return_value = mock_cursor
-        mock_get_db.return_value = mock_conn
-
-        # Act
-        todos = get_todos_by_user(1)
-
-        # Assert
-        assert len(todos) == 2
-        assert todos[0]['todo_id'] == 1
-        assert todos[0]['title'] == 'Buy milk'
-        assert todos[0]['completed'] == False
-        assert todos[1]['todo_id'] == 2
-        assert todos[1]['completed'] == True
-
-    @patch('todo_service.get_db_connection')
-    def test_get_todos_empty_list(self, mock_get_db):
-        """Test getting todos for user with no todos"""
-        # Arrange
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_cursor.fetchall.return_value = []
-        mock_conn.cursor.return_value = mock_cursor
-        mock_get_db.return_value = mock_conn
-
-        # Act
-        todos = get_todos_by_user(999)
-
-        # Assert
-        assert todos == []
-
-class TestMarkTodoComplete:
-    """Unit tests for mark_todo_complete function"""
-
-    @patch('todo_service.get_db_connection')
-    def test_mark_complete_success(self, mock_get_db):
-        """Test marking todo as complete"""
-        # Arrange
+class TestDeleteTodo:
+    @patch("todo_service.get_db_connection")
+    def test_delete_todo_success(self, mock_get_db):
         mock_conn = Mock()
         mock_cursor = Mock()
         mock_cursor.fetchone.return_value = [1]
         mock_conn.cursor.return_value = mock_cursor
         mock_get_db.return_value = mock_conn
 
-        # Act
-        result = mark_todo_complete(1, 1)
+        result = todo_service.delete_todo(1)
 
-        # Assert
-        assert result == True
+        assert result == {"message": "Todo with id 1 deleted"}
+        mock_cursor.execute.assert_called_once_with(
+            "DELETE FROM todos WHERE id = %s RETURNING id;", (1,)
+        )
         mock_conn.commit.assert_called_once()
+        mock_cursor.close.assert_called_once()
+        mock_conn.close.assert_called_once()
 
-    @patch('todo_service.get_db_connection')
-    def test_mark_complete_not_found(self, mock_get_db):
-        """Test marking non-existent todo fails"""
-        # Arrange
+    @patch("todo_service.get_db_connection")
+    def test_delete_todo_not_found_raises(self, mock_get_db):
         mock_conn = Mock()
         mock_cursor = Mock()
         mock_cursor.fetchone.return_value = None
         mock_conn.cursor.return_value = mock_cursor
         mock_get_db.return_value = mock_conn
 
-        # Act & Assert
         with pytest.raises(ValueError, match="Todo not found"):
-            mark_todo_complete(999, 1)
-
-# Pytest fixtures for reusable test setup
-@pytest.fixture
-def mock_db_connection():
-    """Fixture to provide a mocked database connection"""
-    with patch('todo_service.get_db_connection') as mock:
-        mock_conn = Mock()
-        mock_cursor = Mock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock.return_value = mock_conn
-        yield {
-            'connection': mock_conn,
-            'cursor': mock_cursor,
-            'get_db': mock
-        }
+            todo_service.delete_todo(999)

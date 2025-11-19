@@ -1,121 +1,54 @@
-import pytest
+import unittest
 from unittest.mock import patch
-import json
 import sys
-sys.path.append('../examples')
+import os
+from flask import json
 
-from todo_service import app
+# Add the path to the backend source code
+sys.path.append(os.path.abspath("../src/backend"))
 
-@pytest.fixture
-def client():
-    """Flask test client"""
-    app.config['TESTING'] = True
-    with app.test_client() as client:
-        yield client
+from app import app
 
-class TestTodoAPI:
-    """Test Flask API endpoints"""
 
-    @patch('todo_service.create_todo')
-    def test_create_todo_endpoint_success(self, mock_create, client):
-        """Test POST /api/todos success"""
-        # Arrange
-        mock_create.return_value = 123
+class TestTodoAPI(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
 
-        # Act
-        response = client.post(
-            '/api/todos',
-            data=json.dumps({
-                'title': 'Test todo',
-                'description': 'Test description',
-                'user_id': 1
-            }),
-            content_type='application/json'
-        )
-
-        # Assert
-        assert response.status_code == 201
-        data = json.loads(response.data)
-        assert data['todo_id'] == 123
-
-    @patch('todo_service.create_todo')
-    def test_create_todo_endpoint_validation_error(self, mock_create, client):
-        """Test POST /api/todos with validation error"""
-        # Arrange
-        mock_create.side_effect = ValueError("Title is required")
-
-        # Act
-        response = client.post(
-            '/api/todos',
-            data=json.dumps({
-                'title': '',
-                'description': 'Test',
-                'user_id': 1
-            }),
-            content_type='application/json'
-        )
-
-        # Assert
-        assert response.status_code == 400
-        data = json.loads(response.data)
-        assert 'error' in data
-
-    @patch('todo_service.get_todos_by_user')
-    def test_get_todos_endpoint(self, mock_get_todos, client):
-        """Test GET /api/todos/<user_id>"""
-        # Arrange
+    @patch("app.get_todos")
+    def test_get_todos(self, mock_get_todos):
         mock_get_todos.return_value = [
-            {
-                'todo_id': 1,
-                'title': 'Test todo',
-                'description': 'Test',
-                'completed': False,
-                'created_at': '2024-01-15T10:30:00'
-            }
+            {"id": 1, "text": "Buy milk"},
+            {"id": 2, "text": "Walk dog"},
         ]
 
-        # Act
-        response = client.get('/api/todos/1')
-
-        # Assert
-        assert response.status_code == 200
+        response = self.client.get("/api/todos")
         data = json.loads(response.data)
-        assert 'todos' in data
-        assert len(data['todos']) == 1
-        assert data['todos'][0]['title'] == 'Test todo'
 
-    @patch('todo_service.mark_todo_complete')
-    def test_complete_todo_endpoint_success(self, mock_complete, client):
-        """Test PUT /api/todos/<id>/complete"""
-        # Arrange
-        mock_complete.return_value = True
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data, [
+            {"id": 1, "text": "Buy milk"},
+            {"id": 2, "text": "Walk dog"},
+        ])
+        mock_get_todos.assert_called_once()
 
-        # Act
-        response = client.put(
-            '/api/todos/1/complete',
-            data=json.dumps({'user_id': 1}),
-            content_type='application/json'
-        )
+    @patch("app.create_todo")
+    def test_create_todo(self, mock_create_todo):
+        mock_create_todo.return_value = {"id": 3, "text": "Read book"}
 
-        # Assert
-        assert response.status_code == 200
+        response = self.client.post("/api/todos", json={"text": "Read book"})
         data = json.loads(response.data)
-        assert data['success'] == True
 
-    @patch('todo_service.mark_todo_complete')
-    def test_complete_todo_endpoint_not_found(self, mock_complete, client):
-        """Test PUT /api/todos/<id>/complete with non-existent todo"""
-        # Arrange
-        mock_complete.side_effect = ValueError("Todo not found")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(data, {"id": 3, "text": "Read book"})
+        mock_create_todo.assert_called_once_with("Read book")
 
-        # Act
-        response = client.put(
-            '/api/todos/999/complete',
-            data=json.dumps({'user_id': 1}),
-            content_type='application/json'
-        )
+    @patch("app.delete_todo")
+    def test_delete_todo(self, mock_delete_todo):
+        mock_delete_todo.return_value = {"message": "Todo with id 1 deleted"}
 
-        # Assert
-        assert response.status_code == 404
+        response = self.client.delete("/api/todos/1")
         data = json.loads(response.data)
-        assert 'error' in data
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data, {"message": "Todo with id 1 deleted"})
+        mock_delete_todo.assert_called_once_with(1)

@@ -1,4 +1,4 @@
-name: Build, Push, and Update GitOps
+name: Build, Test, Push, and Update GitOps
 
 on:
   push:
@@ -15,8 +15,71 @@ env:
   APP_FILE: todo.yaml
 
 jobs:
+  test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    #services:
+      #postgres:
+        #image: postgres:15
+        #env:
+          #POSTGRES_USER: postgres
+          #POSTGRES_PASSWORD: postgres
+          #POSTGRES_DB: tododb
+        #options: >-
+          #--health-cmd pg_isready
+          #--health-interval 10s
+          #--health-timeout 5s
+          #--health-retries 5
+        #ports:
+          #- 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend-tests/requirements.txt
+
+      - name: Run unit tests (mocked DB)
+        run: |
+          pytest backend-tests/test_unit.py -v
+
+      #- name: Run integration tests (real DB)
+        #env:
+          #POSTGRES_HOST: localhost
+          #POSTGRES_DB: tododb
+          #POSTGRES_USER: postgres
+          #POSTGRES_PASSWORD: postgres
+        #run: |
+          #pytest backend-tests/test_integration.py -v
+
+      - name: Run API tests
+        run: |
+          # Start the backend server in the background
+          python src/backend/app.py &
+          sleep 5
+          pytest backend-tests/test_api.py -v
+
+      #- name: Generate coverage report
+        #run: |
+          #pytest backend-tests --cov=src/backend --cov-report=xml --cov-report=term
+
+      #- name: Upload coverage to Codecov
+        #uses: codecov/codecov-action@v3
+        #with:
+          #files: ./coverage.xml
+          #flags: backend
+
   build:
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: read
       packages: write
